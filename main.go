@@ -20,6 +20,19 @@ var db *sql.DB
 
 func main() {
 
+	//var b []byte
+	//f, e := os.Open("./log/mysql/mysql-bin.000003")
+	//if e != nil {
+	//	panic(e)
+	//}
+	//b, e = ioutil.ReadAll(f)
+	//if e != nil {
+	//	panic(e)
+	//}
+	//
+	//fmt.Printf("%s", hex.Dump(b))
+	//os.Exit(5)
+
 	var imageName = "mysql/mysql-server:latest"
 	//imageName = "mysql/mysql-server:5.6"
 
@@ -106,39 +119,9 @@ func main() {
 		},
 		{
 			MountType:   iotmakerdocker.KVolumeMountTypeBind,
-			Source:      "./script/admin.sh",
-			Destination: "/admin.sh",
+			Source:      "./script/my:latest.cnf",
+			Destination: "/etc/my.cnf",
 		},
-	}
-
-	switch imageName {
-	case "mysql/mysql-server:5.6":
-		ml = append(
-			ml,
-			[]iotmakerdocker.Mount{
-				{
-					MountType:   iotmakerdocker.KVolumeMountTypeBind,
-					Source:      "./script/entrypoint:5.6.sh",
-					Destination: "/entrypoint.sh",
-				},
-			}...,
-		)
-	case "mysql/mysql-server:latest":
-		ml = append(
-			ml,
-			[]iotmakerdocker.Mount{
-				{
-					MountType:   iotmakerdocker.KVolumeMountTypeBind,
-					Source:      "./script/my:latest.cnf",
-					Destination: "/etc/my.cnf",
-				},
-				{
-					MountType:   iotmakerdocker.KVolumeMountTypeBind,
-					Source:      "./script/entrypoint:latest.sh",
-					Destination: "/entrypoint.sh",
-				},
-			}...,
-		)
 	}
 
 	// define an external MySQL config file path
@@ -297,7 +280,7 @@ func main() {
 		}
 	}
 
-	err = RemoveAllByNameContains("delete")
+	//err = RemoveAllByNameContains("delete")
 	if err != nil {
 		panic(err)
 	}
