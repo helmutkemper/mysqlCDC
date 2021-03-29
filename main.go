@@ -19,13 +19,16 @@ import (
 var db *sql.DB
 
 func main() {
+
+	var imageName = "mysql/mysql-server:latest"
+	//imageName = "mysql/mysql-server:5.6"
+
 	var err error
 	var pullStatusChannel = iotmakerdocker.NewImagePullStatusChannel()
 	var newPort nat.Port
 	var mountList []mount.Mount
 	var defaultMySQLPort nat.Port
 	var containerId string
-	var logContainer []byte
 
 	var dockerSys = iotmakerdocker.DockerSystem{}
 	err = dockerSys.Init()
@@ -92,29 +95,54 @@ func main() {
 			"binlog-format=row",
 			"log_bin=/var/log/mysql/mysql-bin.log",
 		},
-		Image: "mysql/mysql-server:latest",
+		Image: imageName,
+	}
+
+	ml := []iotmakerdocker.Mount{
+		{
+			MountType:   iotmakerdocker.KVolumeMountTypeBind,
+			Source:      "./log",
+			Destination: "/var/log",
+		},
+		{
+			MountType:   iotmakerdocker.KVolumeMountTypeBind,
+			Source:      "./script/admin.sh",
+			Destination: "/admin.sh",
+		},
+	}
+
+	switch imageName {
+	case "mysql/mysql-server:5.6":
+		ml = append(
+			ml,
+			[]iotmakerdocker.Mount{
+				{
+					MountType:   iotmakerdocker.KVolumeMountTypeBind,
+					Source:      "./script/entrypoint:5.6.sh",
+					Destination: "/entrypoint.sh",
+				},
+			}...,
+		)
+	case "mysql/mysql-server:latest":
+		ml = append(
+			ml,
+			[]iotmakerdocker.Mount{
+				{
+					MountType:   iotmakerdocker.KVolumeMountTypeBind,
+					Source:      "./script/my:latest.cnf",
+					Destination: "/etc/my.cnf",
+				},
+				{
+					MountType:   iotmakerdocker.KVolumeMountTypeBind,
+					Source:      "./script/entrypoint:latest.sh",
+					Destination: "/entrypoint.sh",
+				},
+			}...,
+		)
 	}
 
 	// define an external MySQL config file path
-	mountList, err = iotmakerdocker.NewVolumeMount(
-		[]iotmakerdocker.Mount{
-			{
-				MountType:   iotmakerdocker.KVolumeMountTypeBind,
-				Source:      "./log",
-				Destination: "/var/log",
-			},
-			{
-				MountType:   iotmakerdocker.KVolumeMountTypeBind,
-				Source:      "./my.cnf",
-				Destination: "/etc/my.cnf",
-			},
-			{
-				MountType:   iotmakerdocker.KVolumeMountTypeBind,
-				Source:      "./script/entrypoint.sh",
-				Destination: "/entrypoint.sh",
-			},
-		},
-	)
+	mountList, err = iotmakerdocker.NewVolumeMount(ml)
 	if err != nil {
 		return
 	}
@@ -137,14 +165,46 @@ func main() {
 	}
 
 	err = dockerSys.ContainerStart(containerId)
-
-	_, err = dockerSys.ContainerLogsWaitText(containerId, "/usr/sbin/mysqld: ready for connection", log.Writer())
 	if err != nil {
 		panic(err)
 	}
 
-	logContainer, err = dockerSys.ContainerLogs(containerId)
-	log.Printf("%s", logContainer)
+	switch imageName {
+	case "mysql/mysql-server:latest":
+		_, err = dockerSys.ContainerLogsWaitText(containerId, "/usr/sbin/mysqld: ready for connection", log.Writer())
+		if err != nil {
+			panic(err)
+		}
+
+	case "mysql/mysql-server:5.6":
+		_, err = dockerSys.ContainerLogsWaitText(containerId, "/usr/sbin/mysqld (mysqld 5.6.51) starting as process", log.Writer())
+		if err != nil {
+			panic(err)
+		}
+
+	}
+
+	time.Sleep(30 * time.Second)
+
+	var exitCode int
+	var runing bool
+	exitCode, runing, err = dockerSys.ContainerExecCommand(containerId, []string{`mysql`, `-uroot`, `-ppass`, `-e`, `CREATE USER 'admin'@'%' IDENTIFIED BY 'admin';`})
+	if err != nil {
+		panic(err)
+	}
+	log.Printf("exitCode: %v, runing: %v\n", exitCode, runing)
+
+	exitCode, runing, err = dockerSys.ContainerExecCommand(containerId, []string{`mysql`, `-uroot`, `-ppass`, `-e`, `GRANT ALL PRIVILEGES ON *.* TO 'admin'@'%' WITH GRANT OPTION;`})
+	if err != nil {
+		panic(err)
+	}
+	log.Printf("exitCode: %v, runing: %v\n", exitCode, runing)
+
+	exitCode, runing, err = dockerSys.ContainerExecCommand(containerId, []string{`mysql`, `-uroot`, `-ppass`, `-e`, `FLUSH PRIVILEGES;`})
+	if err != nil {
+		panic(err)
+	}
+	log.Printf("exitCode: %v, runing: %v\n", exitCode, runing)
 
 	var loopLimit = 60
 	var wg sync.WaitGroup

@@ -108,18 +108,12 @@ if [ "$1" = 'mysqld' ]; then
 			echo "[Entrypoint] GENERATED ROOT PASSWORD: $MYSQL_ROOT_PASSWORD"
 		fi
 		if [ -z "$MYSQL_ROOT_HOST" ]; then
-			ROOTCREATE="ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}'; \
-			CREATE USER 'admin'@'%' IDENTIFIED BY 'admin'; \
-      GRANT ALL PRIVILEGES ON *.* TO 'admin'@'%' WITH GRANT OPTION; \
-      FLUSH PRIVILEGES;"
+			ROOTCREATE="ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}';"
 		else
 			ROOTCREATE="ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}'; \
 			CREATE USER 'root'@'${MYSQL_ROOT_HOST}' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}'; \
 			GRANT ALL ON *.* TO 'root'@'${MYSQL_ROOT_HOST}' WITH GRANT OPTION ; \
-			GRANT PROXY ON ''@'' TO 'root'@'${MYSQL_ROOT_HOST}' WITH GRANT OPTION ; \
-			CREATE USER 'admin'@'%' IDENTIFIED BY 'admin'; \
-      GRANT ALL PRIVILEGES ON *.* TO 'admin'@'%' WITH GRANT OPTION; \
-      FLUSH PRIVILEGES;"
+			GRANT PROXY ON ''@'' TO 'root'@'${MYSQL_ROOT_HOST}' WITH GRANT OPTION ;"
 		fi
 		"${mysql[@]}" <<-EOSQL
 			DELETE FROM mysql.user WHERE user NOT IN ('mysql.infoschema', 'mysql.session', 'mysql.sys', 'root') OR host NOT IN ('localhost');
