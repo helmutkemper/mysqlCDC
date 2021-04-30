@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/go-connections/nat"
@@ -10,9 +11,7 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"log"
-	"sync"
-
-	binlog "github.com/granicus/mysql-binlog-go"
+	"strings"
 	"time"
 )
 
@@ -20,21 +19,9 @@ var db *sql.DB
 
 func main() {
 
-	//var b []byte
-	//f, e := os.Open("./log/mysql/mysql-bin.000003")
-	//if e != nil {
-	//	panic(e)
-	//}
-	//b, e = ioutil.ReadAll(f)
-	//if e != nil {
-	//	panic(e)
-	//}
-	//
-	//fmt.Printf("%s", hex.Dump(b))
-	//os.Exit(5)
-
 	var imageName = "mysql/mysql-server:latest"
-	//imageName = "mysql/mysql-server:5.6"
+	imageName = "mysql/mysql-server:5.6"
+	imageName = "mariadb:latest"
 
 	var err error
 	var pullStatusChannel = iotmakerdocker.NewImagePullStatusChannel()
@@ -42,6 +29,10 @@ func main() {
 	var mountList []mount.Mount
 	var defaultMySQLPort nat.Port
 	var containerId string
+
+	var exitCode int
+	var runing bool
+	var stdout, stderr []byte
 
 	var dockerSys = iotmakerdocker.DockerSystem{}
 	err = dockerSys.Init()
@@ -101,12 +92,13 @@ func main() {
 			"defaults-file=/etc/my.cnf",
 			"initialize-insecure",
 			"datadir=/var/lib/mysql",
-			"console",
 			"MYSQL_ROOT_HOST=0.0.0.0",
 			"expire_logs_days=10",
 			"max_binlog_size=100M",
 			"binlog-format=row",
-			"log_bin=/var/log/mysql/mysql-bin.log",
+			"log-bin=/var/log/mysql/mysql-bin.log",
+			"log-basename=/var/log/mysql/mysql.log",
+			"binlog_format=mixed",
 		},
 		Image: imageName,
 	}
@@ -120,7 +112,7 @@ func main() {
 		{
 			MountType:   iotmakerdocker.KVolumeMountTypeBind,
 			Source:      "./script/my:latest.cnf",
-			Destination: "/etc/my.cnf",
+			Destination: "/etc/mysql/my.cnf",
 		},
 	}
 
@@ -152,75 +144,78 @@ func main() {
 		panic(err)
 	}
 
+	//ready for connections. Version: '8.0.24'
+
 	switch imageName {
+	case "mariadb:latest":
+		_, err = dockerSys.ContainerLogsWaitText(containerId, "socket: '/run/mysqld/mysqld.sock'  port: 3306", log.Writer())
+		if err != nil {
+			panic(err)
+		}
+
 	case "mysql/mysql-server:latest":
-		_, err = dockerSys.ContainerLogsWaitText(containerId, "/usr/sbin/mysqld: ready for connection", log.Writer())
+		_, err = dockerSys.ContainerLogsWaitText(containerId, "/usr/sbin/mysqld: ready for connections", log.Writer())
 		if err != nil {
 			panic(err)
 		}
 
 	case "mysql/mysql-server:5.6":
-		_, err = dockerSys.ContainerLogsWaitText(containerId, "/usr/sbin/mysqld (mysqld 5.6.51) starting as process", log.Writer())
+		_, err = dockerSys.ContainerLogsWaitText(containerId, "socket: '/var/lib/mysql/mysql.sock'  port: 3306  MySQL Community Server (GPL)", log.Writer())
 		if err != nil {
 			panic(err)
 		}
 
 	}
 
-	time.Sleep(30 * time.Second)
-
-	var exitCode int
-	var runing bool
-	exitCode, runing, err = dockerSys.ContainerExecCommand(containerId, []string{`mysql`, `-uroot`, `-ppass`, `-e`, `CREATE USER 'admin'@'%' IDENTIFIED BY 'admin';`})
+	exitCode, runing, stdout, stderr, err = dockerSys.ContainerExecCommand(containerId, []string{`mysql`, `-uroot`, `-ppass`, `-e`, `CREATE USER 'admin'@'%' IDENTIFIED BY 'admin';`})
 	if err != nil {
 		panic(err)
 	}
 	log.Printf("exitCode: %v, runing: %v\n", exitCode, runing)
+	log.Printf("comando 1: %s\n", stdout)
+	log.Printf("comando 1 err: %s\n", stderr)
 
-	exitCode, runing, err = dockerSys.ContainerExecCommand(containerId, []string{`mysql`, `-uroot`, `-ppass`, `-e`, `GRANT ALL PRIVILEGES ON *.* TO 'admin'@'%' WITH GRANT OPTION;`})
+	exitCode, runing, stdout, stderr, err = dockerSys.ContainerExecCommand(containerId, []string{`mysql`, `-uroot`, `-ppass`, `-e`, `GRANT ALL PRIVILEGES ON *.* TO 'admin'@'%' WITH GRANT OPTION;`})
 	if err != nil {
 		panic(err)
 	}
 	log.Printf("exitCode: %v, runing: %v\n", exitCode, runing)
+	log.Printf("comando 1: %s\n", stdout)
+	log.Printf("comando 1 err: %s\n", stderr)
 
-	exitCode, runing, err = dockerSys.ContainerExecCommand(containerId, []string{`mysql`, `-uroot`, `-ppass`, `-e`, `FLUSH PRIVILEGES;`})
+	exitCode, runing, stdout, stderr, err = dockerSys.ContainerExecCommand(containerId, []string{`mysql`, `-uroot`, `-ppass`, `-e`, `FLUSH PRIVILEGES;`})
 	if err != nil {
 		panic(err)
 	}
 	log.Printf("exitCode: %v, runing: %v\n", exitCode, runing)
+	log.Printf("comando 1: %s\n", stdout)
+	log.Printf("comando 1 err: %s\n", stderr)
 
 	var loopLimit = 60
-	var wg sync.WaitGroup
-	wg.Add(1)
 
-	go func() {
-		var err error
-		for {
-			time.Sleep(time.Second)
-			loopLimit -= 1
-			if loopLimit < 0 {
-				panic(err)
-			}
-
-			db, err = sql.Open("mysql", "admin:admin@/test")
-			if err != nil {
-				continue
-			}
-
-			db.SetConnMaxLifetime(time.Minute * 3)
-			db.SetMaxOpenConns(10)
-			db.SetMaxIdleConns(10)
-
-			err = db.Ping()
-			if err != nil {
-				continue
-			}
-
-			wg.Done()
-			return
+	for {
+		time.Sleep(time.Second)
+		loopLimit -= 1
+		if loopLimit < 0 {
+			panic(err)
 		}
-	}()
-	wg.Wait()
+
+		db, err = sql.Open("mysql", "admin:admin@/test")
+		if err != nil {
+			continue
+		}
+
+		db.SetConnMaxLifetime(time.Minute * 3)
+		db.SetMaxOpenConns(10)
+		db.SetMaxIdleConns(10)
+
+		err = db.Ping()
+		if err != nil {
+			continue
+		}
+
+		break
+	}
 
 	//err = CreateDatabase()
 	//if err != nil {
@@ -236,7 +231,7 @@ func main() {
 		err = Set(
 			"5996b891-9d3c-4038-af37-cb07f5f0f72d",
 			1,
-			"Fulano da Silva Sauro",
+			"Fulan'o da Silv\"a S`au(ro)",
 			"Sauro",
 			"sauro@pangea.com",
 			"admin",
@@ -246,8 +241,12 @@ func main() {
 		}
 	}
 
-	err = Update()
+	err = Get()
+	if err != nil {
+		panic(err)
+	}
 
+	err = Update()
 	if err != nil {
 		panic(err)
 	}
@@ -255,7 +254,6 @@ func main() {
 	time.Sleep(time.Second * 5)
 
 	var dir []fs.FileInfo
-	var logMysql *binlog.Binlog
 	dir, err = ioutil.ReadDir("./log/mysql")
 	if err != nil {
 		panic(err)
@@ -266,18 +264,42 @@ func main() {
 			continue
 		}
 
-		logMysql, err = binlog.OpenBinlog("./log/mysql/" + dirData.Name())
+		//***************************************************************************************************************************************************************************
+
+		exitCode, runing, stdout, stderr, err = dockerSys.ContainerExecCommand(containerId, []string{`mysqlbinlog`, `-v`, `--base64-output=DECODE-ROWS`, `/var/log/mysql/` + dirData.Name()})
 		if err != nil {
 			panic(err)
 		}
 
-		for _, event := range logMysql.Events() {
-			if event.Type() == binlog.WRITE_ROWS_EVENTv2 {
-				rowsEvent := event.Data().(*binlog.RowsEvent)
+		sp := strings.Split(string(stdout), "/*!*/;")
+		for _, v := range sp {
 
-				log.Println("Found some rows that were inserted:", rowsEvent.Rows)
+			if strings.Contains(v, "INSERT INTO time_zone") == true {
+				continue
 			}
+
+			if strings.Contains(v, "end_log_pos") == true {
+				continue
+			}
+
+			if strings.Contains(v, "COMMIT") == true {
+				continue
+			}
+
+			if strings.Contains(v, "START TRANSACTION") == true {
+				continue
+			}
+
+			v = strings.Trim(v, "\n")
+			v = strings.Trim(v, "\r")
+			log.Printf("%v", v)
 		}
+
+		//log.Printf("exitCode: %v, runing: %v\n", exitCode, runing)
+		//log.Printf("comando 1: %s\n", stdout)
+		//log.Printf("comando 1 err: %s\n", stderr)
+
+		//***************************************************************************************************************************************************************************
 	}
 
 	//err = RemoveAllByNameContains("delete")
@@ -334,7 +356,7 @@ func CreateTable() (err error) {
 				admin INTEGER,         -- 0: normal user; 1 admin user
 				name VARCHAR(255),						 -- complete name
 				nickName VARCHAR(255),				 -- nick name
-				eMail VARCHAR(255),						 -- e-mail
+				email VARCHAR(255),						 -- e-mail
 				password VARCHAR(255)				 -- password
 			);
 		`,
@@ -366,6 +388,47 @@ func CreateDatabase() (err error) {
 	_, err = statement.Exec()
 	if err != nil {
 		log.Printf("SQLiteUser.CreateDatabase().error: %v", err.Error())
+	}
+
+	return
+}
+
+func Get() (err error) {
+	var rows *sql.Rows
+	rows, err = db.Query(
+		`
+			SELECT
+				id,
+				admin,
+				name,
+				nickName,
+				email,
+				password
+			FROM
+				user
+		`,
+	)
+	if err != nil {
+		return
+	}
+
+	var id string
+	var mail string
+	var admin int
+	var name string
+	var nickName string
+	var password string
+
+	if rows.Next() {
+		err = rows.Scan(&id, &admin, &name, &nickName, &mail, &password)
+		if err != nil {
+			return
+		}
+
+		log.Printf("id: %v, admin: %v, nickName: %v, email: %v, password: %v", id, admin, nickName, mail, password)
+
+	} else {
+		err = errors.New("getAll() error")
 	}
 
 	return
